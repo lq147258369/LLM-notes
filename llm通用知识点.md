@@ -9,6 +9,7 @@ https://arxiv.org/pdf/2106.02902
 ```
 3. [如何修改LLM存储的知识？](#如何修改llm存储的知识)
 4. [当LLM越来越大时会发生什么？](#当llm越来越大时会发生什么)
+5. 为什么LLM都是decoder结构？．https://spaces.ac.cn/archives/9529
 
 
 ## 1.对LLM的通用理解
