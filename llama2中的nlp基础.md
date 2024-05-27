@@ -141,22 +141,37 @@ T5模型出自文章[《Exploring the Limits of Transfer Learning with a Unified
 
 ## Attention
 ### k-v cache
-  - [大模型推理性能优化之KV Cache解读 - 知乎 (zhihu.com)](https://zhuanlan.zhihu.com/p/630832593)
+[大模型推理性能优化之KV Cache解读 - 知乎 (zhihu.com)](https://zhuanlan.zhihu.com/p/630832593)
 [key和value用来计算点积attention。](https://medium.com/@joaolages/kv-caching-explained-276520203249)k-v cache 用于在token生成阶段且仅用在decoder中，比如decoder模型GPT或encoder-decoder模型中的decoder部分如T5，像bert这种encoder模型没有KV cache。GPT类模型一次推理只输出一个token，输出token会与输入tokens 拼接在一起，然后作为下一次推理的输入，这样不断反复直到遇到终止符。即在推理过程中，每 step 内，输入一个 token序列，经过Embedding层将输入token序列变为一个三维张量[b, s, h]，经过一通计算，最后经logits层将计算结果映射至词表空间，输出张量维度为[b, s, vocab_size]。当前轮输出token与输入tokens拼接，并作为下一轮的输入tokens，反复多次。可以看出第
 i+1轮输入数据只比第i轮输入数据新增了一个token，其他全部相同！因此第i+1轮推理时必然包含了第i轮的部分计算。KV Cache的出发点就在这里，缓存当前轮可重复利用的计算结果，下一轮计算时直接读取缓存结果，就是这么简单，不存在什么Cache miss问题。
-但是，kv cache可能会占用很大一部分内存，成为长上下文生成的瓶颈，尤其是对于大型语言模型
+但是，kv cache可能会占用很大一部分内存，成为长上下文生成的瓶颈，尤其是对于大型语言模型。
+
+[llama2源码中，generate过程中每次新的查询 (Q)是新token](https://github.com/meta-llama/llama/issues/151)。为什么新的查询 (Q)是新token，而不是新token加上之前生成的所有token？因为每次生成过程中只需要为新加入的 token 计算查询（Q），而不需要为整个序列重新计算查询。这是因为序列中之前的部分已经在之前的生成步骤中被处理过，并且这些部分没有发生变化。假设我们使用一个 Transformer 模型来生成文本，起始输入为 "The quick brown fox"，我们希望继续生成文本。初始生成步骤:输入序列是 "The quick brown fox"。对于这个序列，模型计算每个单词的 Q, K, V。基于这些计算，模型生成一个新的词，比如 "jumps"。下一个生成步骤:现在序列变成了 "The quick brown fox jumps"。在这个步骤中，对于 "The quick brown fox" 部分的 Q, K, V 已经在前一步计算过了，因此不需要重新计算。模型只需要为新加入的词 "jumps" 计算 Q, K, V。这些新计算的值将用来与之前缓存的 K, V 值一起，计算新的输出词的概率。
 
 1. [KV Cache节省了Self-Attention层中哪部分的计算？](https://zhuanlan.zhihu.com/p/630832593)
+    KV Cache 主要节省了对已经计算过的键（Key）和值（Value）的重复计算。键（Keys）和值（Values）的重复计算：在没有使用 KV Cache 的情况下，每次输入序列更新时（例如，在文本生成或语音识别的递增模式中），模型需要为整个输入序列重新计算 Keys 和 Values，即使大部分序列元素已经在之前的步骤中处理过。这种重复计算尤其在长序列处理中非常低效。
+    通过使用 KV Cache：只需为新添加到序列中的元素（通常是一个或几个 token）计算新的 Keys 和 Values。之前计算的 Keys 和 Values 被存储（缓存）起来，并可以直接在后续的注意力计算中重用。这意味着对于大部分序列，模型不需要重新计算 Keys 和 Values，只需将新计算的部分添加到现有的缓存中。
 2. KV Cache对MLP层的计算量有影响吗？
+    KV Cache 主要设计用于优化 Transformer 模型中的自注意力（Self-Attention）层的计算，而不直接影响多层感知器（MLP）层的计算量。MLP层主要进行基于前一层输出的密集矩阵运算，并不涉及对序列中不同时间步长的数据进行长期缓存。因此，KV Cache 的使用与MLP层的运算量没有直接关系。
 3. KV Cache对block间的数据传输量有影响吗？
-### Attention）
+   在不使用KV Cache的情况下，每个新的生成步骤都可能需要重新从头开始计算整个序列的键（Key）和值（Value），这涉及到大量的数据再次通过模型的多个层传输。使用KV Cache后，仅需要为新增加的序列部分计算键和值，并将其与已缓存的数据合并。这减少了因重复计算而需要在模型层之间传输的数据量。
+### Attention
 #### 分组查询注意力（Grouped-Query Attention）
 [Grouped-Query Attention，GQA](https://arxiv.org/pdf/2305.13245)，7b和13b模型并没有增加GQA，Llama2新加入。GQA共享key和value对，在推理的时候可以减少kv cache处理的sequence中token
   ![Alt text](image-1.png)
 #### MQA
 ## FFN
+在 Transformer 模型中，MLP层通常位于自注意力层之后，用于对从注意力层传入的每个位置的数据进行进一步的非线性变换。这一层通常包括以下几个步骤：
+线性变换：首先对数据应用一个线性变换（通常是一个全连接层）。
+激活函数：应用一个非线性激活函数，如 ReLU 或 GELU。
+第二个线性变换：进行另一个线性变换。
+可能的正则化：如 Dropout。
+
+
 - SwiGLU激活函数：在前馈神经网络（FFN）使用SwiGLU 激活函数替换了Transformer中的 ReLU 激活函数来提升性能
 - RMSNorm
+
+
 
 ## SFT指令微调
 
