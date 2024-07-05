@@ -22,6 +22,18 @@ logits = torch.tensor([
 对于第二个样本，模型认为它最可能属于第四个类别（得分最高为2.0）。
 >对于第三个样本，模型认为它最可能属于第三个类别（得分最高为2.5）。
 
+# pytorch
+## [nn.Sequential与nn.ModuleList的区别](https://blog.csdn.net/u014090429/article/details/112618607)
+不同点1：nn.Sequential内部实现了forward函数，因此可以不用写forward函数，而nn.ModuleList则没有实现内部forward函数。
+
+不同点2：nn.Sequential可以使用OrderedDict对每层进行命名。
+
+不同点3：nn.Sequential里面的模块按照顺序进行排列的，所以必须确保前一个模块的输出大小和下一个模块的输入大小是一致的。而nn.ModuleList 并没有定义一个网络，它只是将不同的模块储存在一起，这些模块之间并没有什么先后顺序可言。
+
+不同点4：有的时候网络中有很多相似或者重复的层，我们一般会考虑用 for 循环来创建它们，而不是一行一行地写
+
+                        
+
 # torch模型保存
 ## 状态字典(state_dict)
 **一个状态字典就是一个简单的 Python 的字典，其键值对是每个网络层和其对应的参数张量。** PyTorch 中，一个模型(torch.nn.Module)的可学习参数(也就是权重和偏置值)是包含在模型参数(model.parameters())中的。模型的状态字典只包含带有可学习参数的网络层（比如卷积层、全连接层等）和注册的缓存（batchnorm的 running_mean）。优化器对象(torch.optim)同样也是有一个状态字典，包含的优化器状态的信息以及使用的超参数。
@@ -71,16 +83,29 @@ torch.save大致来说，它是把每一个Python object使用pickle进行保存
 
 ## torch模型格式
 [Pytorch格式 .pt .pth .bin .onnx 详解](https://zhuanlan.zhihu.com/p/620688513)
+### torchscript模型
+TorchScript 是一种用于将PyTorch模型转换为一个格式，该格式可以优化执行并运行在**没有Python解释器**的环境中。生成的TorchScript模型可以被保存到一个 .pt 或 .pth 文件中，但这里的 .pt 文件不只是包含状态字典，而是包含一个可以独立于原始Python代码运行的完整模型。
+
 ### .pt .pth格式
-是 PyTorch 的默认保存格式。
+可以是 使用 torch.save保存的 PyTorch 模型的状态字典或整个模型对象。保存为 .pt 或 .pth 的模型通常指的是使用 torch.save 保存的PyTorch模型的状态字典或整个模型对象。
+
+区分保存的pt文件是TorchScript模型还是一个常规的PyTorch模型文件（例如保存的状态字典或整个模型），可以通过尝试加载文件并检查其内容来实现。、
+可以使用 torch.jit.load 来尝试加载假定为TorchScript的模型，如果文件是一个TorchScript模型，这个操作会成功；如果不是，则会抛出异常。对于非TorchScript的模型或状态字典，你可以使用 torch.load 并检查加载的对象的类型来确定它是完整的模型还是仅状态字典。
+
 ### .bin格式
 .bin文件是一个二进制文件，可以保存Pytorch模型的参数和持久化缓存。.bin文件的大小较小，加载速度较快，因此在生产环境中使用较多。通常由 Hugging Face 的 Transformers 库使用，主要用于保存预训练模型的权重。
 
 ### .onnx格式（Open Neural Network Exchange）
 可以通过PyTorch提供的torch.onnx.export函数转化为ONNX格式，这样可以在其他深度学习框架中使用PyTorch训练的模型。
 
+使用场景对比
+- TorchScript 适用于需要在 PyTorch 环境中开发和部署模型的场景，尤其是当模型需要在不支持 Python 的平台上运行时。TorchScript 模型可以部署在 NVIDIA GPU 上。但要将 TorchScript 模型部署在使用 TensorRT 的 NVIDIA GPU 上，需要首先将 TorchScript 模型转换为 ONNX 格式。
+- ONNX 适用于需要将模型从一种深度学习框架迁移到另一种，或需要利用特定硬件支持的场景。例如，开发模型时使用 PyTorch，然后将模型转换为 ONNX 格式以在使用 TensorRT 的 NVIDIA GPU 上部署。
+
 |格式|优点|缺点|怎么选择格式
 |----|-----|-----|-----|
 |.pt 或 .pth 格式| <li>原生支持： 直接由 PyTorch 提供支持，无需额外转换。<li> 灵活性： 可以选择保存整个模型（包括架构）或仅状态字典（推荐）。 <li>易于加载： 直接使用 PyTorch API 加载。|<li> 依赖 PyTorch： 加载模型需要 PyTorch 环境，不适合非 Python 环境或非 PyTorch 框架。<li> 版本依赖性： 保存的模型可能依赖特定版本的 PyTorch，不同版本间可能存在兼容问题。|如果在 PyTorch 环境中工作且无需将模型迁移到其他框架， 使用 .pt 或 .pth 格式是最方便的。
 |.bin 格式| <li>优化存储： 通常用于存储模型权重，文件大小适中。<li>跨框架使用：虽然主要由 Transformers 库使用，但理论上可用于其他环境，只要适当处理权重数据。|<li>需要模型架构信息： 通常只保存权重，加载时需要先定义好模型架构。<li>库依赖性： 主要由 Hugging Face 库使用，与库的特定功能强相关。|如果你使用 Hugging Face 的 Transformers， .bin 文件是标准选择。
 |.onnx 格式|<li>框架无关性： 可以在支持 ONNX 的任何平台上加载和运行，如 TensorFlow, Caffe2, Microsoft's CNTK,等。<li>广泛支持： 许多硬件加速器和优化工具支持 ONNX，便于部署。<li>性能优化： 可以利用 ONNX 运行时进行优化，提高模型执行效率。|<li>转换过程： 需要从原始框架（如 PyTorch）转换为 ONNX，这个过程可能出现兼容性问题，尤其是对于复杂的自定义层或特殊的操作。<li>更新滞后： ONNX 格式可能不总是能够支持最新的层或操作。|如果需要在不同的平台或框架之间迁移模型， 或需要在特定设备上部署模型，如使用 TensorFlow Serving，或者需要模型在多种硬件上运行，则选择 .onnx 格式会更合适。
+
+# tokenizer
