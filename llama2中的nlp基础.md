@@ -155,11 +155,25 @@ i+1轮输入数据只比第i轮输入数据新增了一个token，其他全部�
     KV Cache 主要设计用于优化 Transformer 模型中的自注意力（Self-Attention）层的计算，而不直接影响多层感知器（MLP）层的计算量。MLP层主要进行基于前一层输出的密集矩阵运算，并不涉及对序列中不同时间步长的数据进行长期缓存。因此，KV Cache 的使用与MLP层的运算量没有直接关系。
 3. KV Cache对block间的数据传输量有影响吗？
    在不使用KV Cache的情况下，每个新的生成步骤都可能需要重新从头开始计算整个序列的键（Key）和值（Value），这涉及到大量的数据再次通过模型的多个层传输。使用KV Cache后，仅需要为新增加的序列部分计算键和值，并将其与已缓存的数据合并。这减少了因重复计算而需要在模型层之间传输的数据量。
+4. 为什么降低KV Cache的大小如此重要？
+   众所周知，一般情况下LLM的推理都是在GPU上进行，单张GPU的显存是有限的，一部分我们要用来存放模型的参数和前向计算的激活值，这部分依赖于模型的体量，选定模型后它就是个常数；另外一部分我们要用来存放模型的KV Cache，这部分不仅依赖于模型的体量，还依赖于模型的输入长度，也就是在推理过程中是动态增长的，当Context长度足够长时，它的大小就会占主导地位，可能超出一张卡甚至一台机（8张卡）的总显存量。
+
+    在GPU上部署模型的原则是：能一张卡部署的，就不要跨多张卡；能一台机部署的，就不要跨多台机。这是因为“卡内通信带宽 > 卡间通信带宽 > 机间通信带宽”，由于“木桶效应”，模型部署时跨的设备越多，受设备间通信带宽的的“拖累”就越大，事实上即便是单卡H100内SRAM与HBM的带宽已经达到了3TB/s，但对于Short Context来说这个速度依然还是推理的瓶颈，更不用说更慢的卡间、机间通信了。
+
+    所以，减少KV Cache的目的就是要实现在更少的设备上推理更长的Context，或者在相同的Context长度下让推理的batch size更大，从而实现更快的推理速度或者更大的吞吐总量。当然，最终目的都是为了实现更低的推理成本。
+
+    要想更详细地了解这个问题，读者可以进一步阅读《FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness》、《A guide to LLM inference and performance》、《LLM inference speed of light》等文章，
 ### Attention
-#### 分组查询注意力（Grouped-Query Attention）
+![Alt text](images/image-2.png)
+#### MHA（Multi-head Attention）
+标准的多头注意力机制，包含h个Query、Key 和 Value 矩阵。所有注意力头的 Key 和 Value 矩阵权重不共享。后面的MQA、GQA、MLA，都是围绕“如何减少KV Cache同时尽可能地保证效果”这个主题发展而来的产物。
+#### MQA（Multi-Query Attention，Fast Transformer Decoding: One Write-Head is All You Need）
+多查询注意力的一种变体，也是用于自回归解码的一种注意力机制。与MHA不同的，MQA 让所有的头之间共享同一份 Key 和 Value 矩阵，每个头只单独保留了一份 Query 参数，从而大大减少 Key 和 Value 矩阵的参数量。
+#### GQA（Grouped-Query Attention，Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints）
+分组查询注意力，GQA将查询头分成G组，每个组共享一个Key 和 Value 矩阵。GQA-G是指具有G组的grouped-query attention。GQA-1具有单个组，因此具有单个Key 和 Value，等效于MQA。若GQA-H具有与头数相等的组，则其等效于MHA。
 [Grouped-Query Attention，GQA](https://arxiv.org/pdf/2305.13245)，7b和13b模型并没有增加GQA，Llama2新加入。GQA共享key和value对，在推理的时候可以减少kv cache处理的sequence中token
-  ![Alt text](image-1.png)
-#### MQA
+
+
 ## FFN
 在 Transformer 模型中，MLP层通常位于自注意力层之后，用于对从注意力层传入的每个位置的数据进行进一步的非线性变换。这一层通常包括以下几个步骤：
 线性变换：首先对数据应用一个线性变换（通常是一个全连接层）。
